@@ -1,41 +1,65 @@
 #include <SDL2/SDL.h>
 
-bool HandleEvent(SDL_Event* event)
+#define internal static
+#define global_variable static
+#define local_persist static
+
+// TODO: This is a global for now.
+global_variable bool Running;
+
+void event_callback(SDL_Event* event)
 {
-    bool terminate_app = false;
     switch (event->type)
     {
-        case SDL_QUIT:
-            printf("SDL_Quit\n");
-            terminate_app = true;
-            break;
-        case SDL_WINDOWEVENT:
-            switch (event->window.event)
-            {
-                case SDL_WINDOWEVENT_RESIZED:      printf("%d, %d\n", event->window.data1, event->window.data2); break;
-                case SDL_WINDOWEVENT_FOCUS_GAINED: printf("Keyboard focus\n"); break;
-                case SDL_WINDOWEVENT_EXPOSED:      {
-                    static bool is_white   = true;
-                    SDL_Window* window     = SDL_GetWindowFromID(event->window.windowID);
-                    SDL_Renderer* renderer = SDL_GetRenderer(window);
+		case SDL_QUIT:
+		{
+			Running = false;
+		    printf("SDL_Quit\n");
+		} break;
 
-                    if (is_white)
-                    {
-                        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                        is_white = false;
-                    }
-                    else
-                    {
-                        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-                        is_white = true;
-                    }
+		case SDL_WINDOWEVENT:
+		{
+			switch(event->window.event)
+			{
+				case SDL_WINDOWEVENT_RESIZED:
+				{
+					printf("%d, %d\n", event->window.data1, event->window.data2);
+
+				} break;
+
+				case SDL_WINDOWEVENT_FOCUS_GAINED:
+				{
+					printf("Keyboard focused\n");
+				} break;
+
+				case SDL_WINDOWEVENT_EXPOSED:
+				{
+					local_persist bool is_white = true;
+					SDL_Window* window = SDL_GetWindowFromID(event->window.windowID);
+					SDL_Renderer* renderer = SDL_GetRenderer(window);
+
+					if (is_white)
+					{
+						SDL_SetRenderDrawColor(renderer, 255, 255, 255, 1);
+						is_white = false;
+					}
+					else
+					{
+						SDL_SetRenderDrawColor(renderer, 0, 0, 0, 1);
+						is_white = true;
+					}
                     SDL_RenderClear(renderer);
                     SDL_RenderPresent(renderer);
-                    break;
-                }
-            }
+				} break;
+			}
+		} break;
     }
-    return terminate_app;
+    // return terminate_app;
+}
+
+internal void re_render(SDL_Renderer* renderer, int width, int height)
+{
+	SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
 }
 
 int main(int argc, char* argv[])
@@ -48,15 +72,19 @@ int main(int argc, char* argv[])
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 0);
         if (renderer)
         {
-            for (;;)
+			Running = true;
+			while (Running)
             {
                 SDL_Event event;
                 SDL_WaitEvent(&event);
 
-                if (HandleEvent(&event))
-                {
-                    break; // why though?
-                }
+                event_callback(&event); // Removed if
+
+				int width, height;
+				SDL_GetWindowSize(window, &width, &height);
+
+				// re_render(renderer, width, height);
+				// printf("%d, %d\n", width, height);
             }
         }
     }
