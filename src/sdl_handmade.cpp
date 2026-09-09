@@ -1,4 +1,5 @@
 #include <SDL2/SDL.h>
+#include <cstdlib>
 
 #define internal static
 #define global_variable static
@@ -6,6 +7,32 @@
 
 // TODO: This is a global for now.
 global_variable bool Running;
+
+// Win32ResizeDIBSection
+internal void SDLResizeTexture(SDL_Renderer* renderer, int width, int height)
+{
+	SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+	void* 		 pixels  = malloc(width * height * 4);
+
+#if 0
+	// NOT SURE IF THIS IS SUPPOSED TO BE IN HERE
+	if (texture)
+	{
+		SDL_DestroyTexture(texture);
+	}
+	if (pixels)
+	{
+		free(pixels);
+	}
+
+	SDL_UpdateTexture(texture, nullptr, pixels, width * 4);
+	SDL_RenderCopy   (renderer, texture, nullptr, nullptr);
+	SDL_RenderClear  (renderer);
+   	SDL_RenderPresent(renderer);
+#endif
+}
+
+// Win32UpdateWindow??
 
 void event_callback(SDL_Event* event)
 {
@@ -21,10 +48,15 @@ void event_callback(SDL_Event* event)
 		{
 			switch(event->window.event)
 			{
-				case SDL_WINDOWEVENT_RESIZED:
+				case SDL_WINDOWEVENT_SIZE_CHANGED:
 				{
-					printf("%d, %d\n", event->window.data1, event->window.data2);
+					SDL_Window*   window   { SDL_GetWindowFromID(event->window.windowID) };
+					SDL_Renderer* renderer { SDL_GetRenderer(window) };
 
+					int width, height;
+					SDL_GetWindowSize(window, &width, &height);
+					SDLResizeTexture(renderer, width, height);
+					printf("%d, %d\n", event->window.data1, event->window.data2);
 				} break;
 
 				case SDL_WINDOWEVENT_FOCUS_GAINED:
@@ -32,11 +64,12 @@ void event_callback(SDL_Event* event)
 					printf("Keyboard focused\n");
 				} break;
 
+				// Equivalent to Casey's WM_PAINT case
 				case SDL_WINDOWEVENT_EXPOSED:
 				{
 					local_persist bool is_white = true;
-					SDL_Window* window = SDL_GetWindowFromID(event->window.windowID);
-					SDL_Renderer* renderer = SDL_GetRenderer(window);
+					SDL_Window*        window   = SDL_GetWindowFromID(event->window.windowID);
+					SDL_Renderer* 	   renderer = SDL_GetRenderer(window);
 
 					if (is_white)
 					{
@@ -55,11 +88,6 @@ void event_callback(SDL_Event* event)
 		} break;
     }
     // return terminate_app;
-}
-
-internal void re_render(SDL_Renderer* renderer, int width, int height)
-{
-	SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
 }
 
 int main(int argc, char* argv[])
@@ -82,7 +110,6 @@ int main(int argc, char* argv[])
 
 				int width, height;
 				SDL_GetWindowSize(window, &width, &height);
-
 				// re_render(renderer, width, height);
 				// printf("%d, %d\n", width, height);
             }
