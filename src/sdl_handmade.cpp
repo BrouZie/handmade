@@ -8,31 +8,37 @@
 // TODO: This is a global for now.
 global_variable bool Running;
 
-// Win32ResizeDIBSection
-internal void SDLResizeTexture(SDL_Renderer* renderer, int width, int height)
+global_variable SDL_Texture* Texture;
+global_variable void* Pixels;
+global_variable int Texture_width;
+
+internal void resize_texture(SDL_Renderer* renderer, int width, int height)
 {
-	SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-	void* 		 pixels  = malloc(width * height * 4);
-
-#if 0
-	// NOT SURE IF THIS IS SUPPOSED TO BE IN HERE
-	if (texture)
+	if (Pixels)
 	{
-		SDL_DestroyTexture(texture);
+		free(Pixels);
 	}
-	if (pixels)
+	if (Texture)
 	{
-		free(pixels);
+		SDL_DestroyTexture(Texture);
 	}
 
-	SDL_UpdateTexture(texture, nullptr, pixels, width * 4);
-	SDL_RenderCopy   (renderer, texture, nullptr, nullptr);
-	SDL_RenderClear  (renderer);
-   	SDL_RenderPresent(renderer);
-#endif
+	Texture = SDL_CreateTexture(renderer,
+							 	SDL_PIXELFORMAT_ARGB8888,
+								SDL_TEXTUREACCESS_STREAMING,
+								width,
+								height);
+	Texture_width = width;
+	Pixels 		  = malloc(width * height * 4);
 }
 
-// Win32UpdateWindow??
+internal void update_window(SDL_Window* window, SDL_Renderer* renderer)
+{
+	SDL_UpdateTexture(Texture, nullptr, Pixels, Texture_width * 4);
+	SDL_RenderCopy   (renderer, Texture, nullptr, nullptr);
+	// SDL_RenderClear  (renderer);
+   	SDL_RenderPresent(renderer);
+}
 
 void event_callback(SDL_Event* event)
 {
@@ -53,9 +59,7 @@ void event_callback(SDL_Event* event)
 					SDL_Window*   window   { SDL_GetWindowFromID(event->window.windowID) };
 					SDL_Renderer* renderer { SDL_GetRenderer(window) };
 
-					int width, height;
-					SDL_GetWindowSize(window, &width, &height);
-					SDLResizeTexture(renderer, width, height);
+					resize_texture(renderer, event->window.data1, event->window.data2);
 					printf("%d, %d\n", event->window.data1, event->window.data2);
 				} break;
 
@@ -67,22 +71,10 @@ void event_callback(SDL_Event* event)
 				// Equivalent to Casey's WM_PAINT case
 				case SDL_WINDOWEVENT_EXPOSED:
 				{
-					local_persist bool is_white = true;
-					SDL_Window*        window   = SDL_GetWindowFromID(event->window.windowID);
-					SDL_Renderer* 	   renderer = SDL_GetRenderer(window);
-
-					if (is_white)
-					{
-						SDL_SetRenderDrawColor(renderer, 255, 255, 255, 1);
-						is_white = false;
-					}
-					else
-					{
-						SDL_SetRenderDrawColor(renderer, 0, 0, 0, 1);
-						is_white = true;
-					}
-                    SDL_RenderClear(renderer);
-                    SDL_RenderPresent(renderer);
+					// local_persist bool is_white = true;
+					SDL_Window*   window   = SDL_GetWindowFromID(event->window.windowID);
+					SDL_Renderer* renderer = SDL_GetRenderer(window);
+					update_window(window, renderer);
 				} break;
 			}
 		} break;
@@ -107,11 +99,6 @@ int main(int argc, char* argv[])
                 SDL_WaitEvent(&event);
 
                 event_callback(&event); // Removed if
-
-				int width, height;
-				SDL_GetWindowSize(window, &width, &height);
-				// re_render(renderer, width, height);
-				// printf("%d, %d\n", width, height);
             }
         }
     }
