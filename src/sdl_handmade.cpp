@@ -1,52 +1,90 @@
 #include <SDL2/SDL.h>
 #include <cstdlib>
+#include <sys/mman.h>
+#include <stdint.h>
 
 #define internal static
 #define global_variable static
 #define local_persist static
 
-// TODO: This is a global for now.
-global_variable bool Running;
-
+// TODO: clean this global mess
 global_variable SDL_Texture* Texture;
-global_variable void* Pixels;
-global_variable int Texture_width;
+global_variable void* BitmapMemory;
+global_variable int BitmapWidth;
+global_variable int BitmapHeight;
+global_variable int BytesPerPixel=4;
+
+internal void
+render_weird_gradient(int BlueOffset, int GreenOffset)
+{    
+    int width = BitmapWidth;
+    int height = BitmapHeight;
+
+    int pitch = width*BytesPerPixel;
+    uint8_t *row = (uint8_t *)BitmapMemory;    
+    for(int y = 0; y < BitmapHeight; ++y)
+	{
+        uint32_t *pixel = (uint32_t *)row;
+        for(int x {}; x < BitmapWidth; ++x)
+		{
+            uint8_t Blue = (x + BlueOffset);
+            uint8_t Green = (y + GreenOffset);
+            
+            *pixel++ = ((Green << 8) | Blue);
+        }
+
+        row += pitch;
+    }
+}
 
 internal void resize_texture(SDL_Renderer* renderer, int width, int height)
 {
-	if (Pixels)
-	{
-		free(Pixels);
-	}
-	if (Texture)
-	{
-		SDL_DestroyTexture(Texture);
-	}
+    if (BitmapMemory)
+    {
+        munmap(BitmapMemory,
+               BitmapWidth * BitmapHeight * BytesPerPixel);
+    }
 
-	Texture = SDL_CreateTexture(renderer,
-							 	SDL_PIXELFORMAT_ARGB8888,
+    if (Texture)
+    {
+        SDL_DestroyTexture(Texture);
+    }
+
+    Texture = SDL_CreateTexture(renderer,
+								SDL_PIXELFORMAT_ARGB8888,
 								SDL_TEXTUREACCESS_STREAMING,
 								width,
 								height);
-	Texture_width = width;
-	Pixels 		  = malloc(width * height * 4);
+    BitmapWidth  = width;
+    BitmapHeight = height;
+    BytesPerPixel = 4;
+
+    BitmapMemory = mmap(nullptr,
+						BitmapWidth * BitmapHeight * BytesPerPixel,
+						PROT_READ | PROT_WRITE,
+						MAP_ANONYMOUS | MAP_PRIVATE,
+						-1,
+						0);
+
+	// TODO: Clear bitmap to black
 }
 
 internal void update_window(SDL_Window* window, SDL_Renderer* renderer)
 {
-	SDL_UpdateTexture(Texture, nullptr, Pixels, Texture_width * 4);
+	SDL_UpdateTexture(Texture, nullptr, BitmapMemory, BitmapWidth * 4);
 	SDL_RenderCopy   (renderer, Texture, nullptr, nullptr);
 	// SDL_RenderClear  (renderer);
    	SDL_RenderPresent(renderer);
 }
 
-void event_callback(SDL_Event* event)
+bool event_callback(SDL_Event* event)
 {
+	bool terminate_app = false;
     switch (event->type)
     {
 		case SDL_QUIT:
 		{
-			Running = false;
+            terminate_app = true;
 		    printf("SDL_Quit\n");
 		} break;
 
@@ -79,7 +117,7 @@ void event_callback(SDL_Event* event)
 			}
 		} break;
     }
-    // return terminate_app;
+    return terminate_app;
 }
 
 int main(int argc, char* argv[])
@@ -92,13 +130,30 @@ int main(int argc, char* argv[])
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 0);
         if (renderer)
         {
-			Running = true;
+			bool Running = true;
+
+			int xOffset = 0;
+			int yOffset = 0;
+
+			// NOTE: What the fuck is this needed for?? Is it needed at all?
+            // int Width, Height;
+            // SDL_GetWindowSize(window, &Width, &Height);
+            // resize_texture(renderer, Width, Height);
 			while (Running)
             {
                 SDL_Event event;
-                SDL_WaitEvent(&event);
+                while (SDL_PollEvent(&event))
+				{
+					if (event_callback(&event))
+					{
+						Running = false;
+					}
+				}
+				render_weird_gradient(xOffset, yOffset);
+				update_window(window, renderer);
 
-                event_callback(&event); // Removed if
+				++xOffset;
+				yOffset += 2;
             }
         }
     }
