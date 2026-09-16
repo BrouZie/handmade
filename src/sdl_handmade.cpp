@@ -1,5 +1,4 @@
 #include <SDL2/SDL.h>
-#include <cstdlib>
 #include <sys/mman.h>
 #include <stdint.h>
 
@@ -8,76 +7,95 @@
 #define local_persist static
 
 // TODO: clean this global mess
-global_variable SDL_Texture* Texture;
-global_variable void* BitmapMemory;
-global_variable int BitmapWidth;
-global_variable int BitmapHeight;
-global_variable int BytesPerPixel=4;
+//
+struct OffscreenBuffer
+{
+	// NOTE: Pixels are alwasy 32-bits wide, Memory Order BB GG RR XX
+	SDL_Texture* texture;
+	void* memory;
+	int width;
+	int height;
+	int pitch;
+};
 
-internal void
-render_weird_gradient(int BlueOffset, int GreenOffset)
-{    
-    int width = BitmapWidth;
-    int height = BitmapHeight;
+global_variable OffscreenBuffer GlobalBackbuffer;
+global_variable bool GlobalRunning;
 
-    int pitch = width*BytesPerPixel;
-    uint8_t *row = (uint8_t *)BitmapMemory;    
-    for(int y = 0; y < BitmapHeight; ++y)
+struct WindowDimensions // only used as a helper, not enforced throughout
+{
+	int width;
+	int height;
+};
+
+inline WindowDimensions get_window_dimensions(SDL_Window* window)
+{
+	WindowDimensions dimensions;
+    SDL_GetWindowSize(window, &dimensions.width, &dimensions.height);
+	return dimensions;
+}
+
+internal void render_weird_gradient(OffscreenBuffer* buffer, int BlueOffset, int GreenOffset)
+{
+    int width  = buffer->width;
+    int height = buffer->height;
+
+    uint8_t* row = (uint8_t *)buffer->memory;
+    for(int y = 0; y < buffer->height; ++y)
 	{
         uint32_t *pixel = (uint32_t *)row;
-        for(int x {}; x < BitmapWidth; ++x)
+        for(int x {}; x < buffer->width; ++x)
 		{
             uint8_t Blue = (x + BlueOffset);
             uint8_t Green = (y + GreenOffset);
-            
+
             *pixel++ = ((Green << 8) | Blue);
         }
 
-        row += pitch;
+        row += buffer->pitch;
     }
 }
 
-internal void resize_texture(SDL_Renderer* renderer, int width, int height)
+internal void resize_texture(OffscreenBuffer* buffer, SDL_Renderer* renderer, int width, int height)
 {
-    if (BitmapMemory)
+	int bytes_per_pixel = 4;
+    if (buffer->memory)
     {
-        munmap(BitmapMemory,
-               BitmapWidth * BitmapHeight * BytesPerPixel);
+        munmap(buffer->memory,
+               buffer->width * buffer->height * bytes_per_pixel);
     }
 
-    if (Texture)
+    if (buffer->texture)
     {
-        SDL_DestroyTexture(Texture);
+        SDL_DestroyTexture(buffer->texture);
     }
 
-    Texture = SDL_CreateTexture(renderer,
-								SDL_PIXELFORMAT_ARGB8888,
-								SDL_TEXTUREACCESS_STREAMING,
-								width,
-								height);
-    BitmapWidth  = width;
-    BitmapHeight = height;
-    BytesPerPixel = 4;
+    buffer->texture = SDL_CreateTexture(renderer,
+										SDL_PIXELFORMAT_ARGB8888,
+										SDL_TEXTUREACCESS_STREAMING,
+										width,
+										height);
+    buffer->width  = width;
+    buffer->height = height;
+    buffer->pitch  = width * bytes_per_pixel;
+    buffer->memory = mmap(nullptr,
+						  buffer->width * buffer->height * bytes_per_pixel,
+						  PROT_READ | PROT_WRITE,
+						  MAP_ANONYMOUS | MAP_PRIVATE,
+						  -1,
+						  0);
 
-    BitmapMemory = mmap(nullptr,
-						BitmapWidth * BitmapHeight * BytesPerPixel,
-						PROT_READ | PROT_WRITE,
-						MAP_ANONYMOUS | MAP_PRIVATE,
-						-1,
-						0);
-
-	// TODO: Clear bitmap to black
+	// TODO: Probably clear this to black
 }
 
-internal void update_window(SDL_Window* window, SDL_Renderer* renderer)
+internal void display_buf_in_window(OffscreenBuffer buffer, SDL_Window* window, SDL_Renderer* renderer)
 {
-	SDL_UpdateTexture(Texture, nullptr, BitmapMemory, BitmapWidth * 4);
-	SDL_RenderCopy   (renderer, Texture, nullptr, nullptr);
-	// SDL_RenderClear  (renderer);
+	// TODO: Aspect ratio correction
+	SDL_UpdateTexture(buffer.texture, nullptr, buffer.memory, buffer.pitch);
+	SDL_RenderCopy   (renderer, buffer.texture, nullptr, nullptr);
    	SDL_RenderPresent(renderer);
 }
 
-bool event_callback(SDL_Event* event)
+bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
 {
 	bool terminate_app = false;
     switch (event->type)
@@ -85,34 +103,30 @@ bool event_callback(SDL_Event* event)
 		case SDL_QUIT:
 		{
             terminate_app = true;
-		    printf("SDL_Quit\n");
+		    printf("SDL_QUIT\n");
 		} break;
 
 		case SDL_WINDOWEVENT:
 		{
 			switch(event->window.event)
 			{
-				case SDL_WINDOWEVENT_SIZE_CHANGED:
+				case SDL_WINDOWEVENT_SIZE_CHANGED: // this event happens twice on startup
 				{
-					SDL_Window*   window   { SDL_GetWindowFromID(event->window.windowID) };
-					SDL_Renderer* renderer { SDL_GetRenderer(window) };
-
-					resize_texture(renderer, event->window.data1, event->window.data2);
-					printf("%d, %d\n", event->window.data1, event->window.data2);
+                    printf("SDL_WINDOWEVENT_SIZE_CHANGED (%d, %d)\n", event->window.data1, event->window.data2);
 				} break;
 
 				case SDL_WINDOWEVENT_FOCUS_GAINED:
 				{
-					printf("Keyboard focused\n");
+                    printf("SDL_WINDOWEVENT_FOCUS_GAINED\n");
 				} break;
 
 				// Equivalent to Casey's WM_PAINT case
 				case SDL_WINDOWEVENT_EXPOSED:
 				{
 					// local_persist bool is_white = true;
-					SDL_Window*   window   = SDL_GetWindowFromID(event->window.windowID);
+					SDL_Window* window   = SDL_GetWindowFromID(event->window.windowID);
 					SDL_Renderer* renderer = SDL_GetRenderer(window);
-					update_window(window, renderer);
+					display_buf_in_window(*buffer, window, renderer);
 				} break;
 			}
 		} break;
@@ -130,30 +144,30 @@ int main(int argc, char* argv[])
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 0);
         if (renderer)
         {
-			bool Running = true;
+			GlobalRunning = true;
 
+			// NOTE: We are currently assignming the windows dimensions (which hyprland decides)
+			// to our backbuffer (buf containing our pixels). We don't necessarily have to!
+			// (use can really use whatever you want, in order to size the pixel squares)
+			WindowDimensions dimensions = get_window_dimensions(window);
+            resize_texture(&GlobalBackbuffer, renderer, dimensions.width, dimensions.height);
 			int xOffset = 0;
 			int yOffset = 0;
-
-			// NOTE: What the fuck is this needed for?? Is it needed at all?
-            // int Width, Height;
-            // SDL_GetWindowSize(window, &Width, &Height);
-            // resize_texture(renderer, Width, Height);
-			while (Running)
+			while (GlobalRunning)
             {
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
 				{
-					if (event_callback(&event))
+					if (event_callback(&GlobalBackbuffer, &event))
 					{
-						Running = false;
+						GlobalRunning = false;
 					}
 				}
-				render_weird_gradient(xOffset, yOffset);
-				update_window(window, renderer);
+				render_weird_gradient(&GlobalBackbuffer, xOffset, yOffset);
+				display_buf_in_window(GlobalBackbuffer, window, renderer);
 
 				++xOffset;
-				yOffset += 2;
+				yOffset -= 2;
             }
         }
     }
