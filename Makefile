@@ -1,28 +1,25 @@
-APP = build/handmadehero
-BDIR = build
-SRC = src/sdl_handmade.cpp
-DEPS = $(wildcard src/*.cpp src/*.h)
-TOOLCHAIN = g++
-CXXFLAGS = -g -O0 -Wall -Wno-unused-function -Wno-unused-variable
+APP        := build/handmadehero
+SRC        := src/sdl_handmade.cpp
+DEPS       := $(wildcard src/*.cpp src/*.h)
+CXX        := g++ -std=c++17
+CXXFLAGS   := -g -O0 -Wall -Wno-unused-function -Wno-unused-variable
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
-SDL_LIBS := $(shell pkg-config --libs sdl2)
-ARGS ?=
+SDL_LIBS   := $(shell pkg-config --libs sdl2)
 
-.PHONY: compile run clean debug
+.PHONY: all run clean compdb
 
-compile: $(APP)
+all: $(APP)
 
-$(APP): $(DEPS) | $(BDIR)
-	$(TOOLCHAIN) $(CXXFLAGS) $(SDL_CFLAGS) $(SRC) -o $(APP) $(SDL_LIBS)
+$(APP): $(DEPS) Makefile
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) $(SRC) -o $@ $(SDL_LIBS)
 
-$(BDIR):
-	mkdir -p $(BDIR)
-
-run: build
-	./$(APP)
-
-debug: $(APP)
-	gf2 -ex "break main" --args ./$(APP) $(ARGS)
+run: $(APP)
+	./$(APP) $(ARGS)
 
 clean:
-	rm -rf $(BDIR)
+	rm -rf build compile_commands.json
+
+compdb:
+	@printf '[{"directory":"%s","file":"%s","command":"%s"}]\n' \
+		"$(CURDIR)" "$(SRC)" "$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -c $(SRC)" > compile_commands.json
