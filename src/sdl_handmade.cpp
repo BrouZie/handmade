@@ -24,6 +24,13 @@ global_variable OffscreenBuffer GlobalBackbuffer;
 global_variable SDL_GameController* ControllerHandles[MAX_CONTROLLERS];
 global_variable SDL_Haptic*         RumbleHandles[MAX_CONTROLLERS];
 
+// TODO: Kept to test keyboard input - remove later
+global_variable int LineHeight = 10;
+global_variable int LineWidth  = 40;
+
+global_variable int StartRow;
+global_variable int StartCol;
+
 struct WindowDimensions // only used as a helper, not enforced throughout
 {
 	int width;
@@ -55,6 +62,28 @@ internal void render_weird_gradient(OffscreenBuffer* buffer, int BlueOffset, int
         }
 
         row += buffer->pitch;
+    }
+}
+
+// Currently reliant upon global variables
+internal void render_weird_rectangleshape(OffscreenBuffer* buffer)
+{
+    int width  = buffer->width;
+    int height = buffer->height;
+
+	uint8_t Blue  = 0;
+	uint8_t Green = 50;
+	uint8_t Red   = 205;
+
+    uint8_t* start_pos = (uint8_t *)buffer->memory + (buffer->pitch * StartRow) + (4 * StartCol);
+    for(int y {}; y < LineHeight; ++y)
+	{
+        uint32_t *pixel = (uint32_t *)start_pos;
+        for(int x {}; x < LineWidth; ++x)
+		{
+            *pixel++ = (Red << 16) | (Green << 8) | Blue;
+        }
+        start_pos += buffer->pitch;
     }
 }
 
@@ -90,11 +119,11 @@ internal void resize_texture(OffscreenBuffer* buffer, SDL_Renderer* renderer, in
 	// TODO: Probably clear this to black
 }
 
-internal void display_buf_in_window(OffscreenBuffer buffer, SDL_Window* window, SDL_Renderer* renderer)
+internal void display_buf_in_window(OffscreenBuffer* buffer, SDL_Window* window, SDL_Renderer* renderer)
 {
 	// TODO: Aspect ratio correction
-	SDL_UpdateTexture(buffer.texture, nullptr, buffer.memory, buffer.pitch);
-	SDL_RenderCopy   (renderer, buffer.texture, nullptr, nullptr);
+	SDL_UpdateTexture(buffer->texture, nullptr, buffer->memory, buffer->pitch);
+	SDL_RenderCopy   (renderer, buffer->texture, nullptr, nullptr);
    	SDL_RenderPresent(renderer);
 }
 
@@ -131,15 +160,19 @@ bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
             {
                 if(key_code == SDLK_w)
                 {
+					StartRow -= 5;
                 }
                 else if(key_code == SDLK_a)
                 {
+					StartCol -= 5;
                 }
                 else if(key_code == SDLK_s)
                 {
+					StartRow += 5;
                 }
                 else if(key_code == SDLK_d)
                 {
+					StartCol += 5;
                 }
                 else if(key_code == SDLK_q)
                 {
@@ -149,15 +182,19 @@ bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
                 }
                 else if(key_code == SDLK_UP)
                 {
+					LineHeight -= 5;
                 }
                 else if(key_code == SDLK_LEFT)
                 {
+					LineWidth -= 5;
                 }
                 else if(key_code == SDLK_DOWN)
                 {
+					LineHeight += 5;
                 }
                 else if(key_code == SDLK_RIGHT)
                 {
+					LineWidth += 5;
                 }
                 else if(key_code == SDLK_ESCAPE)
                 {
@@ -199,7 +236,7 @@ bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
 					// local_persist bool is_white = true;
 					SDL_Window* window   = SDL_GetWindowFromID(event->window.windowID);
 					SDL_Renderer* renderer = SDL_GetRenderer(window);
-					display_buf_in_window(*buffer, window, renderer);
+					display_buf_in_window(buffer, window, renderer);
 				} break;
 			}
 		} break;
@@ -316,7 +353,8 @@ int main(int argc, char* argv[])
 				}
 
 				render_weird_gradient(&GlobalBackbuffer, xOffset, yOffset);
-				display_buf_in_window(GlobalBackbuffer, window, renderer);
+				render_weird_rectangleshape(&GlobalBackbuffer);
+				display_buf_in_window(&GlobalBackbuffer, window, renderer);
 
 				// ++xOffset;
 				// yOffset -= 2;
