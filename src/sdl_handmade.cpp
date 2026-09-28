@@ -321,22 +321,9 @@ int main(int argc, char* argv[])
 						int16_t stick_x = SDL_GameControllerGetAxis(ControllerHandles[ctrl_idx], SDL_CONTROLLER_AXIS_LEFTX);
 						int16_t stick_y = SDL_GameControllerGetAxis(ControllerHandles[ctrl_idx], SDL_CONTROLLER_AXIS_LEFTY);
 
-						if (up)
-						{
-							yOffset -= 5;
-						}
-						if (down)
-						{
-							yOffset += 5;
-						}
-						if (left)
-						{
-							xOffset -= 5;
-						}
-						if (right)
-						{
-							xOffset += 5;
-						}
+						xOffset += stick_x >> 12;
+						yOffset += stick_y >> 12;
+						printf("stick_x: %d\t\t\tstick_y: %d\n", stick_x, stick_y);
 
 						if (b_button)
 						{
