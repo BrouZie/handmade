@@ -1,4 +1,4 @@
-APP        := build/handmadehero
+APP        := build/dev-handmadehero
 SRC        := src/sdl_handmade.cpp
 DEPS       := $(wildcard src/*.cpp src/*.h)
 CXX        := g++ -std=c++17

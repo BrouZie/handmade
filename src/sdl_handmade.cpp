@@ -1,11 +1,17 @@
+#include "fft.cpp" // REMOVE ME PLEASE
+
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_gamecontroller.h>
 #include <sys/mman.h>
-#include <stdint.h>
 
 #define internal static
 #define global_variable static
 #define local_persist static
+
+#define SAMPLES_PER_SECOND 48000
+#define AUDIO_SAMPLES 512
+#define BASE_TONE_FREQUENCY 261.626f
+
+typedef int32_t bool32;
 
 struct OffscreenBuffer
 {
@@ -17,10 +23,41 @@ struct OffscreenBuffer
 	int pitch;
 };
 
+struct AudioSettings
+{
+    int    samples_per_second;
+    int    dev;
+    Uint16 buffer_size;
+};
+
+enum ToneInterval
+{
+    C0 = 0,
+    Db = 1,
+    D  = 2,
+    Eb = 3,
+    E  = 4,
+    F  = 5,
+    Gb = 6,
+    G  = 7,
+    Ab = 8,
+    A  = 9,
+    Bb = 10,
+    H  = 11,
+    C1 = 12
+};
+
+// RENDERING
 global_variable OffscreenBuffer GlobalBackbuffer;
+
+// AUDIO
+global_variable float Phase;   // keep this between buffers - consider adding to AudioSettings or something
+global_variable ToneInterval TargetToneInterval;
+global_variable float AudioData[AUDIO_SAMPLES];
 
 #define MAX_CONTROLLERS 4
 
+// GAME INPUT
 global_variable SDL_GameController* ControllerHandles[MAX_CONTROLLERS];
 global_variable SDL_Haptic*         RumbleHandles[MAX_CONTROLLERS];
 
@@ -127,6 +164,22 @@ internal void display_buf_in_window(OffscreenBuffer* buffer, SDL_Window* window,
    	SDL_RenderPresent(renderer);
 }
 
+void set_audio_tone(float* user_data, float tone_hz, int size)
+{
+    float phase_increment = 2.0f * (float)M_PI * tone_hz / SAMPLES_PER_SECOND;
+
+    for (int i = 0; i < size; ++i)
+    {
+        user_data[i] = 0.25f * sinf(Phase);
+        Phase += phase_increment;
+
+        if (Phase >= 2.0f * (float)M_PI)
+        {
+            Phase -= 2.0f * (float)M_PI;
+        }
+    }
+}
+
 bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
 {
 	bool terminate_app = false;
@@ -138,82 +191,100 @@ bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
 		    printf("SDL_QUIT\n");
 		} break;
 
+        // TODO: Add SDL_KEYDOWN somewhere?
 		case SDL_KEYDOWN:
-		case SDL_KEYUP:
         {
             SDL_Keycode key_code = event->key.keysym.sym;
-            bool is_down = (event->key.state == SDL_PRESSED);
-            bool was_down = false;
-            if (event->key.state == SDL_RELEASED)
-            {
-                was_down = true;
-            }
-            else if (event->key.repeat != 0)
-            {
-                was_down = true;
-            }
-            
+
             // NOTE: In the windows version, we used "if (IsDown != WasDown)"
             // to detect key repeats. SDL has the 'repeat' value, though,
             // which we'll use.
             if (event->key.repeat == 0)
             {
-                if(key_code == SDLK_w)
+                switch(key_code)
                 {
-					StartRow -= 5;
-                }
-                else if(key_code == SDLK_a)
-                {
-					StartCol -= 5;
-                }
-                else if(key_code == SDLK_s)
-                {
-					StartRow += 5;
-                }
-                else if(key_code == SDLK_d)
-                {
-					StartCol += 5;
-                }
-                else if(key_code == SDLK_q)
-                {
-                }
-                else if(key_code == SDLK_e)
-                {
-                }
-                else if(key_code == SDLK_UP)
-                {
-					LineHeight -= 5;
-                }
-                else if(key_code == SDLK_LEFT)
-                {
-					LineWidth -= 5;
-                }
-                else if(key_code == SDLK_DOWN)
-                {
-					LineHeight += 5;
-                }
-                else if(key_code == SDLK_RIGHT)
-                {
-					LineWidth += 5;
-                }
-                else if(key_code == SDLK_ESCAPE)
-                {
-                    printf("ESCAPE: ");
-                    if(is_down)
+                    case SDLK_UP:
                     {
-                        printf("IsDown ");
-                    }
-                    if(was_down)
+                        LineHeight -= 5;
+                    } break;
+                    case SDLK_LEFT:
                     {
-                        printf("WasDown");
-                    }
-                    printf("\n");
-                }
-                else if(key_code == SDLK_SPACE)
-                {
+                        LineWidth -= 5;
+                    } break;
+                    case SDLK_DOWN:
+                    {
+                        LineHeight += 5;
+                    } break;
+                    case SDLK_RIGHT:
+                    {
+                        LineWidth += 5;
+                    } break;
+                    case SDLK_w:
+                    {
+                        StartRow -= 5;
+                    } break;
+                    case SDLK_a:
+                    {
+                        StartCol -= 5;
+                        TargetToneInterval = C0;
+                    } break;
+                    case SDLK_s:
+                    {
+                        StartRow += 5;
+                        TargetToneInterval = Db;
+                    } break;
+                    case SDLK_d:
+                    {
+                        StartCol += 5;
+                        TargetToneInterval = D;
+                    } break;
+                    case SDLK_f:
+                    {
+                        TargetToneInterval = Eb;
+                    } break;
+                    case SDLK_g:
+                    {
+                        TargetToneInterval = E;
+                    } break;
+                    case SDLK_y:
+                    {
+                        TargetToneInterval = F;
+                    } break;
+                    case SDLK_h:
+                    {
+                        TargetToneInterval = Gb;
+                    } break;
+                    case SDLK_u:
+                    {
+                        TargetToneInterval = G;
+                    } break;
+                    case SDLK_j:
+                    {
+                        TargetToneInterval = Ab;
+                    } break;
+                    case SDLK_i:
+                    {
+                        TargetToneInterval = A;
+                    } break;
+                    case SDLK_k:
+                    {
+                        TargetToneInterval = Bb;
+                    } break;
+                    case SDLK_o:
+                    {
+                        TargetToneInterval = H;
+                    } break;
+                    case SDLK_l:
+                    {
+                        TargetToneInterval = C1;
+                    } break;
                 }
             }
-
+            bool alt_key_was_down = (event->key.keysym.mod & KMOD_ALT);
+            if((key_code == SDLK_F4) && alt_key_was_down)
+            {
+                terminate_app = true;
+            }
         } break;
 
 		case SDL_WINDOWEVENT:
@@ -268,14 +339,81 @@ internal void open_game_controllers()
 		}
 		++ctrl_idx;
 	}
+    if (!all_joysticks)
+    {
+        printf("NO JOYSTICKS DETECTED\n");
+    }
+}
+
+// This is where the audio memory is populated
+internal void audio_callback(void* user_data, Uint8* audio_data, int length)
+{
+    // Clear audio buffer to silence
+    memset(audio_data, 0, length);
+    memcpy(audio_data, user_data, length);
+}
+
+internal void open_audio_device(AudioSettings* audio_settings, void* user_data)
+{
+    FFT_init(); // NOTE: Might be useful as a debug thing
+    SDL_AudioSpec AudioSettings { };
+
+    AudioSettings.freq     = SAMPLES_PER_SECOND;
+    AudioSettings.format   = AUDIO_F32;
+    AudioSettings.channels = 2;
+    AudioSettings.samples  = audio_settings->buffer_size;
+    AudioSettings.callback = *audio_callback;
+
+    AudioSettings.userdata = user_data;
+
+    SDL_OpenAudio(&AudioSettings, 0);
+    SDL_PauseAudio(0); // Unpause audio
+
+    if (AudioSettings.format != AUDIO_S16)
+    {
+        ; // TODO: Complain if we can't get an S16L buffer.
+    }
+}
+
+internal void other_audio(AudioSettings* audio_settings)
+{
+    FFT_init(); // NOTE: Might be useful as a debug thing
+    SDL_AudioSpec desired {};
+    desired.freq = SAMPLES_PER_SECOND;
+    desired.format = AUDIO_F32;
+    desired.channels = 2;
+    desired.samples = audio_settings->buffer_size;
+    desired.callback = nullptr;
+
+    SDL_AudioSpec obtained {};
+
+    audio_settings->dev = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
+
+    if (audio_settings->dev == 0)
+    {
+        printf("SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        return;
+    }
+
+    SDL_PauseAudioDevice(audio_settings->dev, 0);
 }
 
 int main(int argc, char* argv[])
 {
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC);
-    SDL_Window* window = SDL_CreateWindow("My SDL Window", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600,
+    AudioSettings audio_settings = { 
+        .samples_per_second = SAMPLES_PER_SECOND,
+        .dev = 0,
+        .buffer_size = AUDIO_SAMPLES
+    };
+    SDL_Init( SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC | SDL_INIT_AUDIO );
+    SDL_Window* window = SDL_CreateWindow("My SDL Window", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 2000, 800,
                                           SDL_WINDOW_RESIZABLE);
+
 	open_game_controllers();
+    // open_audio_device(&audio_settings, AudioData);
+
+    // Other way of opening audio (PS: uncomment if statement block in while loop too)
+    other_audio(&audio_settings);
 
     if (window)
     {
@@ -293,6 +431,13 @@ int main(int argc, char* argv[])
 			int yOffset = 0;
 			while (running)
             {
+                if (SDL_GetQueuedAudioSize(audio_settings.dev) < sizeof(AudioData) * 4)
+                {
+                    float new_tone = BASE_TONE_FREQUENCY * powf(2.0f, (float)TargetToneInterval / 12.0f);
+                    set_audio_tone(AudioData, new_tone, AUDIO_SAMPLES);
+                    SDL_QueueAudio(audio_settings.dev, AudioData, sizeof(AudioData));
+                }
+
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
 				{
@@ -349,6 +494,7 @@ int main(int argc, char* argv[])
         }
     }
     SDL_DestroyWindow(window);
+    SDL_CloseAudio();
     SDL_Quit();
 
     return 0;
