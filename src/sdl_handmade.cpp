@@ -1,5 +1,3 @@
-#include "fft.cpp" // REMOVE ME PLEASE
-
 #include <SDL2/SDL.h>
 #include <sys/mman.h>
 
@@ -7,28 +5,11 @@
 #define global_variable static
 #define local_persist static
 
-#define SAMPLES_PER_SECOND 48000
-#define AUDIO_SAMPLES 512
-#define BASE_TONE_FREQUENCY 261.626f
+#define PI32 3.14159265358979f
 
+typedef float real32;
+typedef double real64;
 typedef int32_t bool32;
-
-struct OffscreenBuffer
-{
-	// NOTE: Pixels are alwasy 32-bits wide, Memory Order BB GG RR XX
-	SDL_Texture* texture;
-	void* memory;
-	int width;
-	int height;
-	int pitch;
-};
-
-struct AudioSettings
-{
-    int    samples_per_second;
-    int    dev;
-    Uint16 buffer_size;
-};
 
 enum ToneInterval
 {
@@ -47,17 +28,54 @@ enum ToneInterval
     C1 = 12
 };
 
+struct SDLOffscreenBuffer
+{
+	// NOTE: Pixels are alwasy 32-bits wide, Memory Order BB GG RR XX
+	SDL_Texture* texture;
+	void* memory;
+	int width;
+	int height;
+	int pitch;
+};
+
+struct SDLAudioRingBuffer
+{
+    void *data;
+    int size;
+    int write_cursor;
+    int play_cursor;
+};
+
+struct SDLSoundOutput
+{
+    int samples_per_second;
+    real32 tone_hz;
+    int16_t tone_volume;
+    uint32_t running_sample_idx;
+    int wave_period;
+    int bytes_per_sample;
+    int secondary_buffer_size;
+    real32 t_sine;
+    int latency_sample_count;
+};
+
+struct SDLWindowDimensions // only used as a helper, not enforced throughout
+{
+	int width;
+	int height;
+};
+
 // RENDERING
-global_variable OffscreenBuffer GlobalBackbuffer;
+global_variable SDLOffscreenBuffer GlobalBackbuffer;
 
 // AUDIO
-global_variable float Phase;   // keep this between buffers - consider adding to AudioSettings or something
-global_variable ToneInterval TargetToneInterval;
-global_variable float AudioData[AUDIO_SAMPLES];
+global_variable SDLAudioRingBuffer AudioRingBuffer;
 
-#define MAX_CONTROLLERS 4
+// EXPERIMENTAL AUDIO
+global_variable ToneInterval TargetToneInterval;
 
 // GAME INPUT
+#define MAX_CONTROLLERS 4
 global_variable SDL_GameController* ControllerHandles[MAX_CONTROLLERS];
 global_variable SDL_Haptic*         RumbleHandles[MAX_CONTROLLERS];
 
@@ -68,20 +86,14 @@ global_variable int LineWidth  = 40;
 global_variable int StartRow;
 global_variable int StartCol;
 
-struct WindowDimensions // only used as a helper, not enforced throughout
+inline SDLWindowDimensions get_window_dimensions(SDL_Window* window)
 {
-	int width;
-	int height;
-};
-
-inline WindowDimensions get_window_dimensions(SDL_Window* window)
-{
-	WindowDimensions dimensions;
+	SDLWindowDimensions dimensions;
     SDL_GetWindowSize(window, &dimensions.width, &dimensions.height);
 	return dimensions;
 }
 
-internal void render_weird_gradient(OffscreenBuffer* buffer, int BlueOffset, int GreenOffset)
+internal void render_weird_gradient(SDLOffscreenBuffer* buffer, int BlueOffset, int GreenOffset)
 {
     int width  = buffer->width;
     int height = buffer->height;
@@ -103,7 +115,7 @@ internal void render_weird_gradient(OffscreenBuffer* buffer, int BlueOffset, int
 }
 
 // Currently reliant upon global variables
-internal void render_weird_rectangleshape(OffscreenBuffer* buffer)
+internal void render_weird_rectangleshape(SDLOffscreenBuffer* buffer)
 {
     int width  = buffer->width;
     int height = buffer->height;
@@ -124,7 +136,7 @@ internal void render_weird_rectangleshape(OffscreenBuffer* buffer)
     }
 }
 
-internal void resize_texture(OffscreenBuffer* buffer, SDL_Renderer* renderer, int width, int height)
+internal void resize_texture(SDLOffscreenBuffer* buffer, SDL_Renderer* renderer, int width, int height)
 {
 	int bytes_per_pixel = 4;
     if (buffer->memory)
@@ -156,7 +168,7 @@ internal void resize_texture(OffscreenBuffer* buffer, SDL_Renderer* renderer, in
 	// TODO: Probably clear this to black
 }
 
-internal void display_buf_in_window(OffscreenBuffer* buffer, SDL_Window* window, SDL_Renderer* renderer)
+internal void display_buf_in_window(SDLOffscreenBuffer* buffer, SDL_Window* window, SDL_Renderer* renderer)
 {
 	// TODO: Aspect ratio correction
 	SDL_UpdateTexture(buffer->texture, nullptr, buffer->memory, buffer->pitch);
@@ -164,23 +176,45 @@ internal void display_buf_in_window(OffscreenBuffer* buffer, SDL_Window* window,
    	SDL_RenderPresent(renderer);
 }
 
-void set_audio_tone(float* user_data, float tone_hz, int size)
+internal void sdl_fill_sound_buffer(SDLSoundOutput *sound_output, int byte_to_lock, int bytes_to_write)
 {
-    float phase_increment = 2.0f * (float)M_PI * tone_hz / SAMPLES_PER_SECOND;
-
-    for (int i = 0; i < size; ++i)
+    void *region1 = (uint8_t*)AudioRingBuffer.data + byte_to_lock;
+    int region1_size = bytes_to_write;
+    if (region1_size + byte_to_lock > sound_output->secondary_buffer_size)
     {
-        user_data[i] = 0.25f * sinf(Phase);
-        Phase += phase_increment;
+        region1_size = sound_output->secondary_buffer_size - byte_to_lock;
+    }
+    void *region2 = AudioRingBuffer.data;
+    int region2_size = bytes_to_write - region1_size;
+    int region1_sample_count = region1_size/sound_output->bytes_per_sample;
+    int16_t *sample_out = (int16_t *)region1;
+    for(int sample_idx = 0; sample_idx < region1_sample_count; ++sample_idx)
+    {
+        // TODO(casey): Draw this out for people
+        real32 sine_value = sinf(sound_output->t_sine);
+        int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
+        *sample_out++ = sample_value;
+        *sample_out++ = sample_value;
 
-        if (Phase >= 2.0f * (float)M_PI)
-        {
-            Phase -= 2.0f * (float)M_PI;
-        }
+        sound_output->t_sine += 2.0f*PI32*1.0f/(real32)sound_output->wave_period;
+        ++sound_output->running_sample_idx;
+    }
+
+    int region2_sample_count = region2_size/sound_output->bytes_per_sample;
+    sample_out = (int16_t *)region2;
+    for(int sample_idx = 0; sample_idx < region2_sample_count; ++sample_idx)
+    {
+        real32 sine_value = sinf(sound_output->t_sine);
+        int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
+        *sample_out++ = sample_value;
+        *sample_out++ = sample_value;
+
+        sound_output->t_sine += 2.0f*PI32*1.0f/(real32)sound_output->wave_period;
+        ++sound_output->running_sample_idx;
     }
 }
 
-bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
+bool event_callback(SDLOffscreenBuffer* buffer, SDL_Event* event)
 {
 	bool terminate_app = false;
     switch (event->type)
@@ -315,7 +349,7 @@ bool event_callback(OffscreenBuffer* buffer, SDL_Event* event)
     return terminate_app;
 }
 
-internal void open_game_controllers()
+internal void sdl_open_game_controllers()
 {
 	int all_joysticks = SDL_NumJoysticks();
 	int ctrl_idx = 0;
@@ -345,105 +379,117 @@ internal void open_game_controllers()
     }
 }
 
-// This is where the audio memory is populated
-internal void audio_callback(void* user_data, Uint8* audio_data, int length)
+internal void sdl_close_game_controllers()
 {
-    // Clear audio buffer to silence
-    memset(audio_data, 0, length);
-    memcpy(audio_data, user_data, length);
+    for(int ctrl_idx = 0; ctrl_idx < MAX_CONTROLLERS; ++ctrl_idx)
+    {
+        // NOTE: Touching globals
+        if (ControllerHandles[ctrl_idx])
+        {
+            if (RumbleHandles[ctrl_idx])
+            {
+                SDL_HapticClose(RumbleHandles[ctrl_idx]);
+            }
+            SDL_GameControllerClose(ControllerHandles[ctrl_idx]);
+        }
+    }
 }
 
-internal void open_audio_device(AudioSettings* audio_settings, void* user_data)
+// This is where the audio memory is populated
+internal void sdl_audio_callback(void* user_data, Uint8* audio_data, int length)
 {
-    FFT_init(); // NOTE: Might be useful as a debug thing
+    SDLAudioRingBuffer* ring_buffer = (SDLAudioRingBuffer*)user_data;
+
+    int region1_size = length;
+    int region2_size = 0;
+    if (ring_buffer->play_cursor + length > ring_buffer->size)
+    {
+        region1_size = ring_buffer->size - ring_buffer->play_cursor;
+        region2_size = length - region1_size;
+    }
+    memcpy(audio_data, (uint8_t*)(ring_buffer->data) + ring_buffer->play_cursor, region1_size);
+    memcpy(&audio_data[region1_size], ring_buffer->data, region2_size);
+    ring_buffer->play_cursor = (ring_buffer->play_cursor + length) % ring_buffer->size;
+    ring_buffer->write_cursor = (ring_buffer->play_cursor + 2048) % ring_buffer->size;
+}
+
+internal void sdl_init_audio1(int32_t samples_per_second, int32_t buffer_size)
+{
     SDL_AudioSpec AudioSettings { };
 
-    AudioSettings.freq     = SAMPLES_PER_SECOND;
-    AudioSettings.format   = AUDIO_F32;
+    AudioSettings.freq     = samples_per_second;
+    AudioSettings.format   = AUDIO_S16LSB;
     AudioSettings.channels = 2;
-    AudioSettings.samples  = audio_settings->buffer_size;
-    AudioSettings.callback = *audio_callback;
+    AudioSettings.samples  = 512;
+    AudioSettings.callback = &sdl_audio_callback;
 
-    AudioSettings.userdata = user_data;
+    AudioSettings.userdata = &AudioRingBuffer; // NOTE: GLOBAL VARIABLE
+
+    // NOTE: Touching GLOBALS
+    AudioRingBuffer.data = malloc(buffer_size);
+    AudioRingBuffer.size = buffer_size;
+    AudioRingBuffer.write_cursor = 0;
+    AudioRingBuffer.play_cursor = 0;
 
     SDL_OpenAudio(&AudioSettings, 0);
-    SDL_PauseAudio(0); // Unpause audio
+
+    printf("Initialised an Audio device at frequency %d Hz, %d Channels, buffer size %d\n",
+           AudioSettings.freq, AudioSettings.channels, AudioSettings.samples);
 
     if (AudioSettings.format != AUDIO_S16)
     {
-        ; // TODO: Complain if we can't get an S16L buffer.
+        printf("Oops! We didn't get AUDIO_S16LSB as our sample format!\n");
+        SDL_CloseAudio();
     }
-}
-
-internal void other_audio(AudioSettings* audio_settings)
-{
-    FFT_init(); // NOTE: Might be useful as a debug thing
-    SDL_AudioSpec desired {};
-    desired.freq = SAMPLES_PER_SECOND;
-    desired.format = AUDIO_F32;
-    desired.channels = 2;
-    desired.samples = audio_settings->buffer_size;
-    desired.callback = nullptr;
-
-    SDL_AudioSpec obtained {};
-
-    audio_settings->dev = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
-
-    if (audio_settings->dev == 0)
-    {
-        printf("SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
-        return;
-    }
-
-    SDL_PauseAudioDevice(audio_settings->dev, 0);
 }
 
 int main(int argc, char* argv[])
 {
-    AudioSettings audio_settings = { 
-        .samples_per_second = SAMPLES_PER_SECOND,
-        .dev = 0,
-        .buffer_size = AUDIO_SAMPLES
-    };
     SDL_Init( SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC | SDL_INIT_AUDIO );
     SDL_Window* window = SDL_CreateWindow("My SDL Window", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 2000, 800,
                                           SDL_WINDOW_RESIZABLE);
-
-	open_game_controllers();
-    // open_audio_device(&audio_settings, AudioData);
-
-    // Other way of opening audio (PS: uncomment if statement block in while loop too)
-    other_audio(&audio_settings);
+	sdl_open_game_controllers();
 
     if (window)
     {
         SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 0);
         if (renderer)
         {
-			bool running = true;
+			bool Running = true;
 
-			// NOTE: We are currently assignming the windows dimensions (which hyprland decides)
-			// to our backbuffer (buf containing our pixels). We don't necessarily have to!
-			// (use can really use whatever you want, in order to size the pixel squares)
-			WindowDimensions dimensions = get_window_dimensions(window);
-            resize_texture(&GlobalBackbuffer, renderer, dimensions.width, dimensions.height);
+			SDLWindowDimensions Dimensions = get_window_dimensions(window);
+            resize_texture(&GlobalBackbuffer, renderer, Dimensions.width, Dimensions.height);
 			int xOffset = 0;
 			int yOffset = 0;
-			while (running)
+
+
+            // AUDIO SETUP
+            SDLSoundOutput SoundOutput {};
+            SoundOutput.samples_per_second = 48000;
+            SoundOutput.tone_hz = 261.626;
+            SoundOutput.tone_volume = 3000;
+            SoundOutput.running_sample_idx = 0;
+            SoundOutput.wave_period = SoundOutput.samples_per_second / SoundOutput.tone_hz;
+            SoundOutput.bytes_per_sample = sizeof(int16_t) * 2;
+            SoundOutput.secondary_buffer_size = SoundOutput.samples_per_second * SoundOutput.bytes_per_sample;
+            SoundOutput.t_sine = 0.0f;
+            SoundOutput.latency_sample_count = SoundOutput.samples_per_second / 15;
+            // Open our audio device:
+            sdl_init_audio1(SoundOutput.samples_per_second, SoundOutput.secondary_buffer_size);
+            sdl_fill_sound_buffer(&SoundOutput, 0, SoundOutput.latency_sample_count * SoundOutput.bytes_per_sample);
+            SDL_PauseAudio(0);
+
+            bool sound_is_playing = false;
+
+			while (Running)
             {
-                if (SDL_GetQueuedAudioSize(audio_settings.dev) < sizeof(AudioData) * 4)
-                {
-                    float new_tone = BASE_TONE_FREQUENCY * powf(2.0f, (float)TargetToneInterval / 12.0f);
-                    set_audio_tone(AudioData, new_tone, AUDIO_SAMPLES);
-                    SDL_QueueAudio(audio_settings.dev, AudioData, sizeof(AudioData));
-                }
 
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
 				{
 					if (event_callback(&GlobalBackbuffer, &event))
 					{
-						running = false;
+						Running = false;
 					}
 				}
 				for (int ctrl_idx{}; ctrl_idx < MAX_CONTROLLERS; ++ctrl_idx)
@@ -466,9 +512,11 @@ int main(int argc, char* argv[])
 						int16_t stick_x = SDL_GameControllerGetAxis(ControllerHandles[ctrl_idx], SDL_CONTROLLER_AXIS_LEFTX);
 						int16_t stick_y = SDL_GameControllerGetAxis(ControllerHandles[ctrl_idx], SDL_CONTROLLER_AXIS_LEFTY);
 
-						xOffset += stick_x >> 12;
+						xOffset += stick_x >> 12; // similar to: stick_x / 4096;
 						yOffset += stick_y >> 12;
-						printf("stick_x: %d\t\t\tstick_y: %d\n", stick_x, stick_y);
+
+                        SoundOutput.tone_hz = 512 + (261.626f*((real32)stick_y / 40000.0f));
+                        SoundOutput.wave_period = SoundOutput.samples_per_second/SoundOutput.tone_hz;
 
 						if (b_button)
 						{
@@ -486,6 +534,26 @@ int main(int argc, char* argv[])
 
 				render_weird_gradient(&GlobalBackbuffer, xOffset, yOffset);
 				render_weird_rectangleshape(&GlobalBackbuffer);
+
+                // Sound output test
+                SDL_LockAudio();
+                int byte_to_lock = (SoundOutput.running_sample_idx*SoundOutput.bytes_per_sample) % SoundOutput.secondary_buffer_size;
+                int target_cursor = ((AudioRingBuffer.play_cursor +
+                                        (SoundOutput.latency_sample_count*SoundOutput.bytes_per_sample)) %
+                                        SoundOutput.secondary_buffer_size);
+                int bytes_to_write;
+                if (byte_to_lock > target_cursor)
+                {
+                    bytes_to_write = SoundOutput.secondary_buffer_size - byte_to_lock;
+                    bytes_to_write += target_cursor;
+                }
+                else
+                {
+                    bytes_to_write = target_cursor - byte_to_lock;
+                }
+                SDL_UnlockAudio();
+                sdl_fill_sound_buffer(&SoundOutput, byte_to_lock, bytes_to_write);
+
 				display_buf_in_window(&GlobalBackbuffer, window, renderer);
 
 				// ++xOffset;
@@ -493,8 +561,8 @@ int main(int argc, char* argv[])
             }
         }
     }
-    SDL_DestroyWindow(window);
-    SDL_CloseAudio();
+
+    sdl_close_game_controllers();
     SDL_Quit();
 
     return 0;
