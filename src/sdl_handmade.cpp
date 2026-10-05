@@ -1,6 +1,8 @@
 #include <SDL2/SDL.h>
 #include <sys/mman.h>
 
+#include <x86intrin.h> // needed for _rdtsc() - profiling
+
 #define internal static
 #define global_variable static
 #define local_persist static
@@ -481,6 +483,11 @@ int main(int argc, char* argv[])
 
             bool sound_is_playing = false;
 
+            // NOTE: PROFILING
+            uint64_t perf_count_freq = SDL_GetPerformanceFrequency();
+            uint64_t last_counter = SDL_GetPerformanceCounter();
+            uint64_t last_cycle_count  = _rdtsc();
+
 			while (Running)
             {
 
@@ -558,6 +565,22 @@ int main(int argc, char* argv[])
 
 				// ++xOffset;
 				// yOffset -= 2;
+ 
+                // Building profiling information
+                uint64_t end_counter = SDL_GetPerformanceCounter();
+                uint64_t counter_elapsed = end_counter - last_counter;
+
+                real32 ms_per_frame = (((1000.0f * (real64)counter_elapsed / (real64)perf_count_freq)));
+                real32 fps = (real64)perf_count_freq / (real64)counter_elapsed;
+
+                uint64_t end_cycle_count = _rdtsc();
+                uint64_t cycles_elapsed = end_cycle_count - last_cycle_count;
+                real64   mcpf = ((real64)cycles_elapsed / (1000.0f * 1000.0f));
+
+                printf("%.02fms/f, %.02ff/s, %.02fmc/f\n", ms_per_frame, fps, mcpf);
+
+                last_cycle_count = end_cycle_count;
+                last_counter = end_counter;
             }
         }
     }
